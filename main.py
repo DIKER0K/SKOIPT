@@ -406,7 +406,7 @@ def create_teacher_schedules(student_schedules):
 
 
 
-def create_teacher_schedule_docx(teacher_name, schedule, output_folder):
+def create_teacher_schedule_docx(teacher_name, schedule, output_folder, period):
     """
     Создает DOCX файл с расписанием для преподавателя с двумя сменами
     """
@@ -427,7 +427,7 @@ def create_teacher_schedule_docx(teacher_name, schedule, output_folder):
     teacher_run.font.size = Pt(14)
     teacher_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    period_para = doc.add_paragraph("Период: с 13.10.2025 г.")
+    period_para = doc.add_paragraph(f"Период: с {period} г.")
     period_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
     doc.add_paragraph()  # Отступ
@@ -582,6 +582,16 @@ def debug_schedule_content(schedules):
             print(f"  {group_name}: НЕТ ДАННЫХ")
     
     print(f"\n📊 ИТОГО: {total_lessons} пар, {len(total_teachers)} уникальных преподавателей")
+    
+def extract_period_from_docx(file_path):
+    """Извлекает дату начала расписания (период) из первого заголовка группы"""
+    doc = Document(file_path)
+    for paragraph in doc.paragraphs:
+        text = paragraph.text.strip()
+        match = re.search(r'Расписание уроков\s+для\s+.+?\s+группы\s+с\s+([\d.]+)\s*г', text)
+        if match:
+            return match.group(1)
+    return None
 
 def main():
     """
@@ -617,6 +627,9 @@ def main():
         # Отладочная информация
         debug_schedule_content(student_schedules)
         
+        period = extract_period_from_docx(input_file) or "—"
+        print(f"📅 Период расписания: с {period} г.")
+        
         # Загружаем сохраненные настройки смен
         loaded = load_group_shifts()
         
@@ -637,7 +650,7 @@ def main():
         created_files = []
         for teacher_name, schedule in teacher_schedules.items():
             if teacher_name and teacher_name.strip() and teacher_name != "Обществознание":
-                filepath = create_teacher_schedule_docx(teacher_name, schedule, output_dir)
+                filepath = create_teacher_schedule_docx(teacher_name, schedule, output_dir, period)
                 created_files.append(filepath)
                 print(f"📄 Создан файл: {os.path.basename(filepath)}")
         
