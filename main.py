@@ -103,40 +103,42 @@ def parse_schedule_table_fixed(table, group_name, schedules, days_ru):
 def parse_lesson_info_fixed(cell_text):
     """
     Усовершенствованный анализ ячейки расписания.
-    Учитывает возможные переносы, ФИО, аудитории и т.д.
+    Учитывает возможные переносы строк, ФИО и аудитории.
     """
     text = re.sub(r'\s+', ' ', cell_text.strip())
     if not text:
         return None
 
-    # Иногда в одной строке может быть несколько предметов или ФИО подряд
-    # Разбиваем логически
-    parts = re.split(r'(?<=\.)\s+(?=[А-ЯЁ])', text)
+    # Пример строки: "Информатика Ситников Д.А. 221"
+    # или "МДК.01.01 Подготовка педагога ... Юльякшина Р.А."
+    # или "Физика Сагитова С.Ф."
+    teacher_match = re.search(r'([А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.[А-ЯЁ]\.?)', text)
+    classroom_match = re.search(r'(\d{2,4}[А-Яа-я]?)\b', text)
+
+    teacher = teacher_match.group(1) if teacher_match else ''
+    classroom = classroom_match.group(1) if classroom_match else ''
+
+    # Предмет — всё, что до фамилии преподавателя
     subject = ''
-    teacher = ''
-    classroom = ''
+    if teacher_match:
+        subject = text[:teacher_match.start()].strip(' ,.;-')
+    else:
+        # Если ФИО нет — берем всё как предмет
+        subject = text.strip()
 
-    for part in parts:
-        part = part.strip()
+    # Если предмет остался пустым, но есть кабинет — убираем его из текста
+    if not subject and classroom:
+        subject = re.sub(r'\b' + re.escape(classroom) + r'\b', '', text).strip()
 
-        # Проверяем, есть ли ФИО
-        if re.search(r'[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.[А-ЯЁ]\.?', part):
-            teacher = part
-            continue
-
-        # Проверяем кабинет
-        class_match = re.search(r'(\d{2,4}[А-Яа-я]?)', part)
-        if class_match:
-            classroom = class_match.group(1)
-
-        # Остальное считаем предметом
-        if not subject:
-            subject = part
+    # Нормализуем
+    subject = re.sub(r'\s+', ' ', subject).strip()
+    teacher = teacher.strip()
+    classroom = classroom.strip()
 
     if not subject and not teacher:
         return None
 
-    return {'subject': subject.strip(), 'teacher': teacher.strip(), 'classroom': classroom.strip()}
+    return {'subject': subject, 'teacher': teacher, 'classroom': classroom}
 
 def parse_schedule_table(table, group_name, schedules, days_ru):
     """
@@ -408,112 +410,78 @@ def create_teacher_schedules(student_schedules):
 
 def create_teacher_schedule_docx(teacher_name, schedule, output_folder):
     """
-    Создает DOCX файл с расписанием для преподавателя с двумя сменами
+    Создает DOCX файл с расписанием преподавателя.
+    Вторая смена — с новой страницы.
     """
     doc = Document()
-    
-    # Настройка страницы
     section = doc.sections[0]
     section.left_margin = Inches(0.5)
     section.right_margin = Inches(0.5)
-    
+
     # Заголовок
     title = doc.add_heading('Расписание учебных занятий', level=1)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
+
     teacher_para = doc.add_paragraph()
-    teacher_run = teacher_para.add_run(f"Преподаватель: {teacher_name}")
-    teacher_run.bold = True
-    teacher_run.font.size = Pt(14)
+    run = teacher_para.add_run(f"Преподаватель: {teacher_name}")
+    run.bold = True
+    run.font.size = Pt(14)
     teacher_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    period_para = doc.add_paragraph("Период: с 13.10.2025 г.")
+
+    period_para = doc.add_paragraph("Период: с 20.10.2025 г.")
     period_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    doc.add_paragraph()  # Отступ
-    
+    doc.add_paragraph()
+
     days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"]
     lesson_numbers = ['0', '1', '2', '3', '4', '5']
-    
-    # ПЕРВАЯ СМЕНА
-    if any(schedule['first_shift'].values()):
-        doc.add_paragraph().add_run("🎯 ПЕРВАЯ СМЕНА").bold = True
-        doc.add_paragraph()  # Отступ
-        
-        table1 = doc.add_table(rows=len(lesson_numbers) + 1, cols=len(days_ru) + 1)
-        table1.style = 'Table Grid'
-        
-        # Заголовок таблицы
-        hdr_cells = table1.rows[0].cells
-        hdr_cells[0].text = "№ пары"
-        hdr_cells[0].paragraphs[0].runs[0].bold = True
-        
-        for i, day in enumerate(days_ru):
-            hdr_cells[i + 1].text = day
-            hdr_cells[i + 1].paragraphs[0].runs[0].bold = True
-        
-        # Заполнение таблицы первой смены
-        for row_idx, lesson_num in enumerate(lesson_numbers):
-            row_cells = table1.rows[row_idx + 1].cells
-            row_cells[0].text = lesson_num
-            row_cells[0].paragraphs[0].runs[0].bold = True
-            
-            for col_idx, day in enumerate(days_ru):
-                if day in schedule['first_shift'] and lesson_num in schedule['first_shift'][day]:
-                    lesson_data = schedule['first_shift'][day][lesson_num]
-                    
-                    cell_text = f"{lesson_data['subject']}\n"
-                    cell_text += f"Группа: {lesson_data['group']}\n"
-                    if lesson_data['classroom']:
-                        cell_text += f"Ауд.: {lesson_data['classroom']}"
-                    
-                    row_cells[col_idx + 1].text = cell_text
-        
-        doc.add_paragraph()  # Отступ между таблицами
-    
-    # ВТОРАЯ СМЕНА
+
+    def fill_table(shift_data, title_text):
+        if not any(shift_data.values()):
+            return
+        doc.add_paragraph().add_run(title_text).bold = True
+        doc.add_paragraph()
+        table = doc.add_table(rows=len(lesson_numbers) + 1, cols=len(days_ru) + 1)
+        table.style = 'Table Grid'
+
+        hdr = table.rows[0].cells
+        hdr[0].text = "№ пары"
+        hdr[0].paragraphs[0].runs[0].bold = True
+        for i, d in enumerate(days_ru):
+            hdr[i + 1].text = d
+            hdr[i + 1].paragraphs[0].runs[0].bold = True
+
+        for r, num in enumerate(lesson_numbers):
+            row = table.rows[r + 1].cells
+            row[0].text = num
+            row[0].paragraphs[0].runs[0].bold = True
+            for c, day in enumerate(days_ru):
+                if day in shift_data and num in shift_data[day]:
+                    info = shift_data[day][num]
+                    subject = info.get('subject', '')
+                    group = info.get('group', '')
+                    classroom = info.get('classroom', '')
+                    text = ''
+                    if subject:
+                        text += f"{subject}\n"
+                    if group:
+                        text += f"Группа: {group}\n"
+                    if classroom:
+                        text += f"Ауд.: {classroom}"
+                    row[c + 1].text = text.strip()
+
+    # первая смена
+    fill_table(schedule['first_shift'], "ПЕРВАЯ СМЕНА")
+
+    # вторая смена — с новой страницы
     if any(schedule['second_shift'].values()):
-        doc.add_paragraph().add_run("🎯 ВТОРАЯ СМЕНА").bold = True
-        doc.add_paragraph()  # Отступ
-        
-        table2 = doc.add_table(rows=len(lesson_numbers) + 1, cols=len(days_ru) + 1)
-        table2.style = 'Table Grid'
-        
-        # Заголовок таблицы
-        hdr_cells = table2.rows[0].cells
-        hdr_cells[0].text = "№ пары"
-        hdr_cells[0].paragraphs[0].runs[0].bold = True
-        
-        for i, day in enumerate(days_ru):
-            hdr_cells[i + 1].text = day
-            hdr_cells[i + 1].paragraphs[0].runs[0].bold = True
-        
-        # Заполнение таблицы второй смены
-        for row_idx, lesson_num in enumerate(lesson_numbers):
-            row_cells = table2.rows[row_idx + 1].cells
-            row_cells[0].text = lesson_num
-            row_cells[0].paragraphs[0].runs[0].bold = True
-            
-            for col_idx, day in enumerate(days_ru):
-                if day in schedule['second_shift'] and lesson_num in schedule['second_shift'][day]:
-                    lesson_data = schedule['second_shift'][day][lesson_num]
-                    
-                    cell_text = f"{lesson_data['subject']}\n"
-                    cell_text += f"Группа: {lesson_data['group']}\n"
-                    if lesson_data['classroom']:
-                        cell_text += f"Ауд.: {lesson_data['classroom']}"
-                    
-                    row_cells[col_idx + 1].text = cell_text
-    
-    # Если нет занятий ни в одной смене
+        doc.add_page_break()
+        fill_table(schedule['second_shift'], "ВТОРАЯ СМЕНА")
+
     if not any(schedule['first_shift'].values()) and not any(schedule['second_shift'].values()):
         doc.add_paragraph("Нет учебных занятий в расписании").alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    # Сохранение файла
+
     safe_name = re.sub(r'[<>:"/\\|?*]', '_', teacher_name)
-    filename = f"Расписание_{safe_name}.docx"
-    filepath = os.path.join(output_folder, filename)
-    
+    filepath = os.path.join(output_folder, f"Расписание_{safe_name}.docx")
     doc.save(filepath)
     return filepath
 
